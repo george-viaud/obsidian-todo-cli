@@ -7,7 +7,7 @@
 
 ```tasks
 not done
-(due before in 8 days) OR (is overdue)
+due before in 8 days
 sort by priority
 sort by due
 group by tags
