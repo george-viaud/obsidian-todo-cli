@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""
+todo — deterministic writer for an Obsidian vault's TODO file, using the
+syntax of the Obsidian Tasks plugin (https://publish.obsidian.md/tasks/).
+
+Configuration via environment variables:
+  OBSIDIAN_VAULT          (required) absolute path to your Obsidian vault
+  OBSIDIAN_TODO_FILE      (optional) filename inside the vault, default: TODOs.md
+  OBSIDIAN_INBOX_FILE     (optional) filename inside the vault, default: inbox.md
+  OBSIDIAN_TASKS_FILTER   (optional) Tasks-plugin global filter tag, default: #task
+
+The TODO file must contain the literal marker line:
+    ## Raw (CLI appends here)
+Structured task lines are appended after that marker. Existing query blocks
+above the marker are left untouched.
+"""
+
+import argparse
+import datetime as dt
+import os
+import re
+import sys
+from pathlib import Path
+
+VAULT_ENV = "OBSIDIAN_VAULT"
+
+vault_path = os.environ.get(VAULT_ENV)
+if not vault_path:
+    sys.stderr.write(
+        f"error: environment variable {VAULT_ENV} is not set.\n"
+        f"  export {VAULT_ENV}=/absolute/path/to/your/obsidian/vault\n"
+    )
+    sys.exit(2)
+
+VAULT = Path(vault_path).expanduser()
+if not VAULT.is_dir():
+    sys.stderr.write(f"error: {VAULT_ENV}={VAULT} is not a directory.\n")
+    sys.exit(2)
+
+TODOS = VAULT / os.environ.get("OBSIDIAN_TODO_FILE", "TODOs.md")
+INBOX = VAULT / os.environ.get("OBSIDIAN_INBOX_FILE", "inbox.md")
+GLOBAL_FILTER = os.environ.get("OBSIDIAN_TASKS_FILTER", "#task")
+
+PRIORITY_EMOJI = {"high": "⏫", "medium": "🔼", "low": "🔽"}
+DUE_EMOJI = "📅"
+DONE_EMOJI = "✅"
+RAW_MARKER = "## Raw (CLI appends here)\n"
+
+
+def today() -> str:
+    return dt.date.today().isoformat()
+
+
+def parse_date(s: str) -> str:
+    """Accept YYYY-MM-DD or a relative form like 'today', 'tomorrow', '+3d'."""
+    s = s.strip().lower()
+    if s == "today":
+        return today()
+    if s == "tomorrow":
+        return (dt.date.today() + dt.timedelta(days=1)).isoformat()
+    m = re.fullmatch(r"\+(\d+)d", s)
+    if m:
+        return (dt.date.today() + dt.timedelta(days=int(m.group(1)))).isoformat()
+    dt.date.fromisoformat(s)  # raises if invalid
+    return s
+
+
+def normalize_tag(t: str) -> str:
+    t = t.strip().lstrip("#")
+    if not re.fullmatch(r"[A-Za-z0-9_\-/]+", t):
+        raise SystemExit(f"bad tag: {t!r} (allowed: letters, digits, -, _, /)")
+    return "#" + t
+
+
+def format_task(description: str, tags: list[str], priority: str | None,
+                due: str | None) -> str:
+    """Canonical line format. Order is fixed for byte-determinism."""
+    parts = [f"- [ ] {description.strip()}", GLOBAL_FILTER]
+    parts.extend(normalize_tag(t) for t in tags)
+    if priority:
+        parts.append(PRIORITY_EMOJI[priority])
+    if due:
+        parts.append(f"{DUE_EMOJI} {parse_date(due)}")
+    return " ".join(parts)
+
+
+def append_to_todos(line: str) -> None:
+    if not TODOS.exists():
+        raise SystemExit(f"missing file: {TODOS}")
+    text = TODOS.read_text()
+    if RAW_MARKER not in text:
+        raise SystemExit(f"missing marker in {TODOS}: {RAW_MARKER!r}")
+    head, tail = text.split(RAW_MARKER, 1)
+    new_tail = tail.rstrip() + "\n" + line + "\n"
+    TODOS.write_text(head + RAW_MARKER + new_tail)
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    line = format_task(
+        description=args.description,
+        tags=args.tag or [],
+        priority=args.priority,
+        due=args.due,
+    )
+    append_to_todos(line)
+    print(line)
+    return 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    text = TODOS.read_text()
+    pattern = re.compile(r"^- \[( |x)\] .*" + re.escape(GLOBAL_FILTER) + r".*$", re.M)
+    matches = list(pattern.finditer(text))
+    for i, m in enumerate(matches, 1):
+        line = m.group(0)
+        done = m.group(1) == "x"
+        if args.state == "open" and done:
+            continue
+        if args.state == "done" and not done:
+            continue
+        if args.tag and not all(("#" + t.lstrip("#")) in line for t in args.tag):
+            continue
+        print(f"{i:>4}  {line}")
+    return 0
+
+
+def cmd_done(args: argparse.Namespace) -> int:
+    text = TODOS.read_text()
+    pattern = re.compile(r"^- \[ \] .*" + re.escape(GLOBAL_FILTER) + r".*$", re.M)
+    matches = list(pattern.finditer(text))
+    if not 1 <= args.index <= len(matches):
+        raise SystemExit(f"index {args.index} out of range (1..{len(matches)})")
+    m = matches[args.index - 1]
+    original = m.group(0)
+    completed = original.replace("- [ ]", "- [x]", 1) + f" {DONE_EMOJI} {today()}"
+    new_text = text[:m.start()] + completed + text[m.end():]
+    TODOS.write_text(new_text)
+    print(completed)
+    return 0
+
+
+def cmd_inbox(args: argparse.Namespace) -> int:
+    if not INBOX.exists():
+        raise SystemExit(f"missing file: {INBOX}")
+    text = INBOX.read_text()
+    lines = text.splitlines(keepends=False)
+    kept: list[str] = []
+    promoted = 0
+    for line in lines:
+        m = re.match(r"^- (.+)$", line.strip())
+        if not m or not m.group(1).strip():
+            kept.append(line)
+            continue
+        desc = m.group(1).strip()
+        print(f"\n  > {desc}")
+        action = input("    [p]romote / [k]eep / [d]rop / [q]uit > ").strip().lower()
+        if action == "q":
+            kept.append(line)
+            continue
+        if action == "k" or action == "":
+            kept.append(line)
+            continue
+        if action == "d":
+            continue
+        if action == "p":
+            tag_input = input("    tags (space-separated, blank for none) > ").strip()
+            tags = tag_input.split() if tag_input else []
+            due = input("    due (YYYY-MM-DD / today / +3d / blank) > ").strip() or None
+            prio = input("    priority (high/medium/low/blank) > ").strip() or None
+            try:
+                task = format_task(desc, tags, prio, due)
+            except (KeyError, ValueError, SystemExit) as e:
+                print(f"    skipped: {e}")
+                kept.append(line)
+                continue
+            append_to_todos(task)
+            promoted += 1
+            print(f"    -> {task}")
+            continue
+        kept.append(line)
+
+    INBOX.write_text("\n".join(kept).rstrip() + "\n")
+    print(f"\ndone — promoted {promoted}, kept {len(kept)} lines in inbox.md")
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(prog="todo", description=__doc__)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pa = sub.add_parser("add", help="append a new task")
+    pa.add_argument("description")
+    pa.add_argument("--tag", action="append", help="tag (repeatable)")
+    pa.add_argument("--due", help="YYYY-MM-DD, today, tomorrow, or +Nd")
+    pa.add_argument("--priority", choices=["high", "medium", "low"])
+    pa.set_defaults(func=cmd_add)
+
+    pl = sub.add_parser("list", help="show tasks")
+    pl.add_argument("--state", choices=["open", "done", "all"], default="open")
+    pl.add_argument("--tag", action="append", help="filter by tag (repeatable; AND)")
+    pl.set_defaults(func=cmd_list)
+
+    pd = sub.add_parser("done", help="mark task done by index")
+    pd.add_argument("index", type=int)
+    pd.set_defaults(func=cmd_done)
+
+    pi = sub.add_parser("inbox", help="interactively promote inbox.md items")
+    pi.set_defaults(func=cmd_inbox)
+
+    args = p.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
