@@ -13,6 +13,13 @@ The TODO file must contain the literal marker line:
     ## Raw (CLI appends here)
 Structured task lines are appended after that marker. Existing query blocks
 above the marker are left untouched.
+
+Domain conventions (optional, by tag):
+  The CLI does not enforce domains. Recommended practice is to put the
+  domain as the FIRST tag — e.g. `--tag life`, `--tag apex`, `--tag mediaforce` —
+  and use Tasks-plugin query blocks (or `obsidian tasks` with jq filtering) to
+  surface per-domain views. The Claude `todos` skill reads tasks via the
+  official `obsidian` CLI, not by reading this file directly.
 """
 
 import argparse
@@ -52,7 +59,6 @@ def today() -> str:
 
 
 def parse_date(s: str) -> str:
-    """Accept YYYY-MM-DD or a relative form like 'today', 'tomorrow', '+3d'."""
     s = s.strip().lower()
     if s == "today":
         return today()
@@ -61,7 +67,7 @@ def parse_date(s: str) -> str:
     m = re.fullmatch(r"\+(\d+)d", s)
     if m:
         return (dt.date.today() + dt.timedelta(days=int(m.group(1)))).isoformat()
-    dt.date.fromisoformat(s)  # raises if invalid
+    dt.date.fromisoformat(s)
     return s
 
 
@@ -74,7 +80,6 @@ def normalize_tag(t: str) -> str:
 
 def format_task(description: str, tags: list[str], priority: str | None,
                 due: str | None) -> str:
-    """Canonical line format. Order is fixed for byte-determinism."""
     parts = [f"- [ ] {description.strip()}", GLOBAL_FILTER]
     parts.extend(normalize_tag(t) for t in tags)
     if priority:
@@ -109,7 +114,9 @@ def cmd_add(args: argparse.Namespace) -> int:
 
 def cmd_list(args: argparse.Namespace) -> int:
     text = TODOS.read_text()
-    pattern = re.compile(r"^- \[( |x)\] .*" + re.escape(GLOBAL_FILTER) + r".*$", re.M)
+    pattern = re.compile(
+        r"^- \[( |x)\] .*" + re.escape(GLOBAL_FILTER) + r".*$", re.M
+    )
     matches = list(pattern.finditer(text))
     for i, m in enumerate(matches, 1):
         line = m.group(0)
@@ -126,7 +133,9 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_done(args: argparse.Namespace) -> int:
     text = TODOS.read_text()
-    pattern = re.compile(r"^- \[ \] .*" + re.escape(GLOBAL_FILTER) + r".*$", re.M)
+    pattern = re.compile(
+        r"^- \[ \] .*" + re.escape(GLOBAL_FILTER) + r".*$", re.M
+    )
     matches = list(pattern.finditer(text))
     if not 1 <= args.index <= len(matches):
         raise SystemExit(f"index {args.index} out of range (1..{len(matches)})")
@@ -163,7 +172,7 @@ def cmd_inbox(args: argparse.Namespace) -> int:
         if action == "d":
             continue
         if action == "p":
-            tag_input = input("    tags (space-separated, blank for none) > ").strip()
+            tag_input = input("    tags (space-separated, first = domain) > ").strip()
             tags = tag_input.split() if tag_input else []
             due = input("    due (YYYY-MM-DD / today / +3d / blank) > ").strip() or None
             prio = input("    priority (high/medium/low/blank) > ").strip() or None
@@ -190,7 +199,8 @@ def main() -> int:
 
     pa = sub.add_parser("add", help="append a new task")
     pa.add_argument("description")
-    pa.add_argument("--tag", action="append", help="tag (repeatable)")
+    pa.add_argument("--tag", action="append",
+                    help="tag (repeatable; convention: first tag is the domain)")
     pa.add_argument("--due", help="YYYY-MM-DD, today, tomorrow, or +Nd")
     pa.add_argument("--priority", choices=["high", "medium", "low"])
     pa.set_defaults(func=cmd_add)

@@ -48,17 +48,24 @@ A starter template is included in [`vault-template/`](./vault-template/).
 ## Usage
 
 ```bash
-todo add "Pick up dry cleaning" --tag personal --due tomorrow
+todo add "Pick up dry cleaning" --tag life --due tomorrow
 todo add "Review PR" --tag work --priority high --due +2d
-todo add "Cancel that subscription" --tag personal --tag finance
+todo add "Cancel that subscription" --tag life --tag finance
 todo list                       # open tasks
-todo list --tag personal        # filter (AND across multiple --tag)
+todo list --tag life            # filter (AND across multiple --tag)
 todo list --state done
 todo list --state all
 todo done 3                     # mark task #3 (index from `todo list`) done
 todo inbox                      # interactively promote inbox.md bullets
 todo --help
 ```
+
+### Convention: first tag is the "domain"
+
+The CLI does not enforce domains, but a useful convention is to make the
+**first tag** the broad category (`#life`, `#work`, `#home`, `#side/xyz`,
+etc.). Tasks-plugin query blocks at the top of `TODOs.md` can then surface
+per-domain views without splitting your tasks across multiple files.
 
 **Date forms** accepted by `--due`: `YYYY-MM-DD`, `today`, `tomorrow`, `+Nd`.
 
@@ -109,6 +116,23 @@ to a markdown file from inside Obsidian. The convention here:
 
 This preserves byte-determinism in `TODOs.md` (only the CLI writes there)
 while keeping the mobile capture path frictionless.
+
+## Companion: official Obsidian CLI for reads
+
+If you have [Obsidian 1.12+ with the official CLI](https://obsidian.md/cli)
+enabled (currently a Catalyst feature), it pairs well with `todo` as the
+read-side counterpart:
+
+```bash
+obsidian tasks todo                                      # list open tasks (Obsidian-rendered)
+obsidian tasks todo format=json | jq '.[] | select(.text | contains("#life"))'
+obsidian tag name=#apex verbose                          # find file:line of every #apex tag
+```
+
+The official CLI doesn't add the Tasks-plugin `✅ YYYY-MM-DD` done-date
+stamp when marking tasks done, and it requires the Obsidian GUI to be
+running. `todo done <n>` does add the stamp and works headlessly — use it
+for completion.
 
 ## License
 
